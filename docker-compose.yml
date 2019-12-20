@@ -1,0 +1,97 @@
+version: "2"
+services:
+  d8_mariadb:
+    image: wodby/mariadb:$MARIADB_TAG
+    container_name: "${PROJECT_NAME}_mariadb"
+    stop_grace_period: 30s
+    environment:
+      MYSQL_ROOT_PASSWORD: $DB_ROOT_PASSWORD
+      MYSQL_DATABASE: $DB_NAME
+      MYSQL_USER: $DB_USER
+      MYSQL_PASSWORD: $DB_PASSWORD
+
+  d8_php:
+    image: wodby/drupal-php:$PHP_TAG
+    container_name: "${PROJECT_NAME}_php"
+    environment:
+      PHP_SENDMAIL_PATH: /usr/sbin/sendmail -t -i -S d8_mailhog:1025
+      DB_HOST: $DB_HOST
+      DB_USER: $DB_USER
+      DB_PASSWORD: $DB_PASSWORD
+      DB_NAME: $DB_NAME
+      DB_DRIVER: $DB_DRIVER
+      COLUMNS: 80 # Set 80 columns for docker exec -it.
+    volumes:
+      - ../codebase:/var/www/html
+
+  d8_nginx:
+    image: wodby/nginx
+    container_name: "${PROJECT_NAME}_nginx"
+    depends_on:
+      - d8_php
+    environment:
+      NGINX_STATIC_OPEN_FILE_CACHE: "off"
+      NGINX_ERROR_LOG_LEVEL: debug
+      NGINX_BACKEND_HOST: d8_php
+      NGINX_SERVER_ROOT: /var/www/html/web
+      NGINX_VHOST_PRESET: $NGINX_VHOST_PRESET
+    volumes:
+      - ../codebase:/var/www/html
+    labels:
+      - "traefik.http.routers.nginx.rule=Host(`d8.test.it`)"
+      - "traefik.http.services.nginx.loadbalancer.server.port=80"
+      - "traefik.http.routers.nginx.entrypoints=websecure"
+
+  d8_mailhog:
+    image: mailhog/mailhog
+    container_name: "${PROJECT_NAME}_mailhog"
+    labels:
+      - "traefik.http.routers.d8_mailhog.rule=Host(`mailhog.test.it`)"
+      - "traefik.http.services.d8_mailhog.loadbalancer.server.port=80"
+      - "traefik.http.routers.d8_mailhog.entrypoints=websecure"
+
+  traefik:
+    image: "traefik:v2.0"
+    container_name: "traefik"
+    command:
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --providers.docker=true
+      - --api.insecure=true
+      - --certificatesresolvers.le.acme.email=condor616@gmail.com
+      - --certificatesresolvers.le.acme.storage=/acme/acme.json
+      - --certificatesresolvers.le.acme.tlschallenge=true
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./acme:/acme:rw
+    labels:
+      # Dashboard
+      - "traefik.http.routers.traefik.rule=Host(`traefik.test.it`)"
+      - "traefik.http.routers.traefik.service=api@internal"
+      - "traefik.http.routers.traefik.tls.certresolver=le"
+      - "traefik.http.routers.traefik.entrypoints=websecure"
+      - "traefik.http.routers.traefik.middlewares=auth"
+      - "traefik.http.middlewares.auth.basicauth.users=condor:$$apr1$$k50XewHN$$O4H7IHdBotOASTCevF7h.."
+      - "traefik.http.services.traefik.loadbalancer.server.port=8080"
+      # global redirect to https
+      - "traefik.http.routers.http-catchall.rule=hostregexp(`{host:.+}`)"
+      - "traefik.http.routers.http-catchall.entrypoints=web"
+      - "traefik.http.routers.http-catchall.middlewares=redirect-to-https"
+      # middleware redirect
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+
+
+  portainer:
+    image: portainer/portainer
+    container_name: "portainer"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./portainer:/data
+    command: -H unix:///var/run/docker.sock
+    labels:
+      - "traefik.http.routers.portainer.rule=Host(`portainer.test.it`)"
+      - "traefik.http.services.portainer.loadbalancer.server.port=9000"
+      - "traefik.http.routers.portainer.entrypoints=websecure"
